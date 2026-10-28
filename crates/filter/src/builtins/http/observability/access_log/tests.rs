@@ -375,28 +375,48 @@ fn render_text_template_escapes_quotes_and_backslashes() {
 #[test]
 #[expect(clippy::too_many_lines, reason = "one entry per field token")]
 fn render_text_template_matches_json_projection_for_every_field() {
-    let fields = [
-        FieldToken::Method,
-        FieldToken::Path,
-        FieldToken::ClientIp,
-        FieldToken::Status,
-        FieldToken::DurationMs,
-        FieldToken::Cluster,
-        FieldToken::Upstream,
-        FieldToken::RequestId,
-        FieldToken::RequestBodyBytes,
-        FieldToken::ResponseBodyBytes,
-        FieldToken::TraceId,
-        FieldToken::SpanId,
-        FieldToken::GrpcStatus,
-        FieldToken::GrpcStatusName,
-        FieldToken::GrpcMessage,
-        FieldToken::GrpcStatusDetailsBin,
-        FieldToken::RequestHeader("user-agent".to_owned()),
-        FieldToken::RequestHeader("x-absent".to_owned()),
-        FieldToken::ResponseHeader("content-type".to_owned()),
-        FieldToken::Metadata("llm.model".to_owned()),
-        FieldToken::Metadata("absent".to_owned()),
+    let expected = [
+        (FieldToken::Method, "method", "POST"),
+        (FieldToken::Path, "path", "/v1/chat"),
+        (FieldToken::ClientIp, "client_ip", "203.0.113.7"),
+        (FieldToken::Status, "status", "201"),
+        (FieldToken::DurationMs, "duration_ms", "56"),
+        (FieldToken::Cluster, "cluster", "-"),
+        (FieldToken::Upstream, "upstream", "-"),
+        (FieldToken::RequestId, "request_id", "req-1"),
+        (FieldToken::RequestBodyBytes, "request_body_bytes", "12"),
+        (FieldToken::ResponseBodyBytes, "response_body_bytes", "34"),
+        (FieldToken::TraceId, "trace_id", "-"),
+        (FieldToken::SpanId, "span_id", "-"),
+        (FieldToken::GrpcStatus, "grpc_status", "5"),
+        (FieldToken::GrpcStatusName, "grpc_status_name", "NOT_FOUND"),
+        (FieldToken::GrpcMessage, "grpc_message", "no%20such%20user"),
+        (
+            FieldToken::GrpcStatusDetailsBin,
+            "grpc_status_details_bin",
+            "CAUSBG9vcHM",
+        ),
+        (
+            FieldToken::RequestHeader("user-agent".to_owned()),
+            "request_header.user-agent",
+            "curl/8",
+        ),
+        (
+            FieldToken::RequestHeader("x-absent".to_owned()),
+            "request_header.x-absent",
+            "-",
+        ),
+        (
+            FieldToken::ResponseHeader("content-type".to_owned()),
+            "response_header.content-type",
+            "application/json",
+        ),
+        (
+            FieldToken::Metadata("llm.model".to_owned()),
+            "metadata.llm.model",
+            "gpt-4o",
+        ),
+        (FieldToken::Metadata("absent".to_owned()), "metadata.absent", "-"),
     ];
     let mut req = crate::test_utils::make_request(http::Method::POST, "/v1/chat");
     req.headers.insert("user-agent", "curl/8".parse().unwrap());
@@ -406,19 +426,26 @@ fn render_text_template_matches_json_projection_for_every_field() {
     ctx.request_body_bytes = 12;
     ctx.response_body_bytes = 34;
     ctx.set_metadata("llm.model", "gpt-4o");
+    let mut trailers = http::HeaderMap::new();
+    let _prev = trailers.insert("grpc-status", http::HeaderValue::from_static("5"));
+    let _prev = trailers.insert("grpc-message", http::HeaderValue::from_static("no%20such%20user"));
+    let _prev = trailers.insert("grpc-status-details-bin", http::HeaderValue::from_static("CAUSBG9vcHM"));
+    ctx.grpc_completion = praxis_core::grpc::GrpcCompletion::from_headers(&trailers);
     let mut response_headers = http::HeaderMap::new();
     response_headers.insert("content-type", "application/json".parse().unwrap());
 
+    let fields: Vec<FieldToken> = expected.iter().map(|(field, ..)| field.clone()).collect();
     let record = build_record_from_fields(&fields, &ctx, 201, Some(&response_headers), 56);
-    assert_eq!(record.len(), fields.len(), "every token should project one entry");
-    for field in &fields {
+    assert_eq!(record.len(), expected.len(), "every token should project one entry");
+    for (field, key, value) in &expected {
+        assert_eq!(
+            record.get(*key).map(String::as_str),
+            Some(*value),
+            "{field:?} should project {value:?} under {key:?}"
+        );
         let parts = [TemplatePart::Field(field.clone())];
         let line = render_text_template(&parts, &ctx, 201, Some(&response_headers), 56);
-        assert_eq!(
-            record.get(field_json_key(field).as_ref()),
-            Some(&line),
-            "{field:?} should render the same value in text and JSON"
-        );
+        assert_eq!(line, *value, "{field:?} should render {value:?} in text");
     }
 }
 
